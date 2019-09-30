@@ -3,8 +3,13 @@ package report
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MrMikeandike/wsbMorningArchive/pkg/db"
+
+	"github.com/jmoiron/sqlx"
 
 	"github.com/turnage/graw/reddit"
 )
@@ -22,6 +27,17 @@ type Report struct {
 	DateTime  time.Time
 	Title     string
 	rawString string
+}
+
+// ReportRow method will return a db.ReportRow struct from the Report struct.
+func (r *Report) ReportRow(rowID int) *db.ReportRow {
+	return &db.ReportRow{
+		ReportID:     r.FullID,
+		Title:        r.Title,
+		RowID:        rowID,
+		PostDateTime: r.DateTime,
+		RawText:      r.rawString,
+	}
 }
 
 // Page represents one HTTP GETs worth of reddit posts. The first id, last id, and post count can be used to send another request for the next page.
@@ -46,6 +62,7 @@ func GetPage(bot reddit.Bot, params map[string]string) (Page, error) {
 	}
 	var reports []Report
 	for _, v := range harvest.Posts {
+		// TODO: handle deleted posts labeld with v.Deleted
 		if !isReport(v) {
 			continue
 		}
@@ -121,7 +138,7 @@ func GetAll(bot reddit.Bot) ([]Report, error) {
 		if i > 6 {
 			return nil, fmt.Errorf("Looped forever for some reason")
 		}
-		page, err = GetPageBefore(bot, before, string(count))
+		page, err = GetPageBefore(bot, before, strconv.Itoa(count))
 		if err != nil {
 			return nil, err
 		}
@@ -170,4 +187,32 @@ func GetSpecific(bot reddit.Bot, ids []string) (Page, error) {
 		PostCount: resultLEN,
 	}, nil
 
+}
+
+// ScanNew does stuff
+func ScanNew(bot reddit.Bot, sqlDB *sqlx.DB) error {
+	after, err := db.LastKnownID(sqlDB)
+	if err != nil {
+		return err
+	}
+	count := 0
+	var reports []Report
+	var page Page
+	for {
+		page, err = GetPageAfter(bot, after, strconv.Itoa(count))
+		if err != nil {
+			return err
+		}
+		if page.PostCount == 0 {
+			break
+		}
+		reports = append(reports, page.Reports...)
+		count = page.PostCount
+		after = page.LastID
+	}
+	if len(reports) == 0 {
+		return nil
+	}
+
+	return nil
 }
